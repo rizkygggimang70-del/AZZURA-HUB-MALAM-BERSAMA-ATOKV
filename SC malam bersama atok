@@ -1,0 +1,703 @@
+-- AZZURA HUB by Azhari | MALAM SAMA ATOK (v6: anti DC + anti lag, tanpa ESP kode & item umum)
+
+-- Opsional: isi link RAW script ini (GitHub / Pastebin) supaya otomatis jalan lagi setelah rejoin.
+-- Kosongkan kalau nggak dipakai.
+local RELOAD_URL = ""
+
+local Players = game:GetService("Players")
+local RS = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+local TeleportService = game:GetService("TeleportService")
+local LP = Players.LocalPlayer
+
+if getgenv and getgenv().AZ_ATOK_STOP then pcall(getgenv().AZ_ATOK_STOP) end
+
+-- semua ESP default OFF
+local ON = {player=false, atok=false, spider=false, key=false, fuse=false, crow=false,
+    lighter=false, tool=false, plank=false, lock=false, gen=false, note=false, npc=false}
+local tracked, conns = {}, {}
+local speedOn, speedVal, origSpeed = false, 40, 16
+local SPEEDS = {30, 40, 50, 60, 80}
+local noclipOn, lightOn, instantOn, rangeOn, alarmOn = false, false, false, false, false
+local alarmLbl
+local sg
+local MAXD = {plank = 100, note = 100, tool = 400, spider = 250}
+local OFFS = {player=3, atok=4, spider=2.5, key=3, fuse=3.6, crow=4.2, lighter=4.8,
+    tool=3.4, plank=2.4, lock=3.8, gen=4.5, note=2.8, npc=3}
+
+local function guiParent()
+    local ok, h = pcall(function() return gethui and gethui() end)
+    if ok and h then return h end
+    if pcall(function() return game:GetService("CoreGui").Name end) then
+        return game:GetService("CoreGui")
+    end
+    return LP:WaitForChild("PlayerGui")
+end
+
+local ROOT = Instance.new("Folder")
+ROOT.Name = "AZ_ESP"
+ROOT.Parent = guiParent()
+
+local function has(s, w) return s:find(w, 1, true) ~= nil end
+local function nameHit(l, list)
+    for _, w in ipairs(list) do if has(l, w) then return true end end
+    return false
+end
+
+-- ===== ATOK =====
+local ATOK_WORDS = {"atok", "opah", "kakek"}
+local ATOK_ALT = {"monster", "hantu", "ghost", "killer", "enemy", "musuh", "chaser"}
+local SPIDER_WORDS = {"laba", "spider", "tarantula"}
+local HOUSE_BAD = {"rumah","house","home","pintu","door","wall","dinding","room","bilik",
+    "building","gedung","map","lantai","floor","atap","roof","jendela","window","spawn",
+    "bengkel","workshop","garasi","garage","gudang","kamar","dapur","ruang","lorong",
+    "area","zone","basement","loteng","attic","teras","halaman","kebun","gubuk","pondok",
+    "shed","cabin","hut","folder","tempat","lokasi"}
+
+local function isAtokHouse(l)
+    return nameHit(l, ATOK_WORDS) and nameHit(l, HOUSE_BAD)
+end
+
+local function isAtok(inst, l)
+    if not inst:IsA("Model") then return false end
+    if Players:GetPlayerFromCharacter(inst) then return false end
+    if inst:FindFirstChildOfClass("Humanoid") then
+        return nameHit(l, ATOK_WORDS) or nameHit(l, ATOK_ALT)
+    end
+    if not nameHit(l, ATOK_WORDS) then return false end
+    if nameHit(l, HOUSE_BAD) then return false end
+    for _, d in ipairs(inst:GetDescendants()) do
+        if d:IsA("Humanoid") then return false end
+    end
+    local ok, size = pcall(function() return inst:GetExtentsSize() end)
+    return ok and size.Magnitude > 0.5 and size.Magnitude < 18
+end
+
+-- ===== ATURAN ESP =====
+local KEYCOLORS = {
+    {{"kuning", "yellow"}, Color3.fromRGB(255, 235, 0), "Kunci Kuning"},
+    {{"merah", "red"},     Color3.fromRGB(255, 50, 50), "Kunci Merah"},
+    {{"hijau", "green"},   Color3.fromRGB(50, 255, 80), "Kunci Hijau"},
+    {{"ungu", "purple", "violet"}, Color3.fromRGB(180, 70, 255), "Kunci Ungu"},
+    {{"biru", "blue"},     Color3.fromRGB(60, 140, 255), "Kunci Biru"},
+}
+
+local RULES = {
+    {kind="crow", label="Linggis", color=Color3.fromRGB(255,105,200),
+        words={"crowbar","clobar","cobar","linggis","crow bar","crow_bar","pengungkit","tuas"}},
+    {kind="lighter", label="Korek", color=Color3.fromRGB(255,160,40),
+        words={"korek","lighter","mancis","matches"}},
+    {kind="fuse", label="Fius", color=Color3.fromRGB(0,255,220),
+        words={"fuse","fius","fusi","sekring","sekering"},
+        bad={"confus","diffus","refus","infus","profus","effus"}},
+    {kind="tool", label="Alat", color=Color3.fromRGB(170,255,120),
+        words={"sepana","wrench","spanner","senter","flashlight","baterai","battery","obeng","screwdriver"}},
+    {kind="key"},
+    {kind="lock", label="Mangga", color=Color3.fromRGB(255,215,120),
+        words={"mangga","padlock","gembok"}},
+    {kind="gen", label="Generator", color=Color3.fromRGB(255,255,100),
+        words={"generator","genset"}},
+    {kind="plank", label="Papan", color=Color3.fromRGB(205,150,90),
+        words={"papan","plank","barikade","barricade"}},
+    {kind="note", label="Nota", color=Color3.fromRGB(230,230,255),
+        words={"nota","note","kertas","paper","passcode","kode","sandi"}},
+}
+
+local function isKeyName(l)
+    if has(l, "keyboard") or has(l, "monkey") or has(l, "hotkey") then return false end
+    return has(l, "key") or has(l, "kunci")
+end
+
+local function keyInfo(inst)
+    local l = inst.Name:lower()
+    for _, k in ipairs(KEYCOLORS) do
+        for _, w in ipairs(k[1]) do
+            if has(l, w) then return k[2], k[3] end
+        end
+    end
+    local p = inst:IsA("BasePart") and inst or inst:FindFirstChildWhichIsA("BasePart", true)
+    return (p and p.Color or Color3.new(1, 1, 1)), "Kunci"
+end
+
+local function match(l, inst)
+    for _, r in ipairs(RULES) do
+        if r.kind == "key" then
+            if isKeyName(l) then
+                local c, n = keyInfo(inst)
+                return "key", n, c
+            end
+        else
+            if not (r.bad and nameHit(l, r.bad)) and nameHit(l, r.words) then
+                return r.kind, r.label, r.color
+            end
+        end
+    end
+end
+
+-- ===== ESP =====
+local function adorneePart(inst)
+    if inst:IsA("BasePart") then return inst end
+    if inst:IsA("Model") then
+        return inst.PrimaryPart or inst:FindFirstChild("HumanoidRootPart")
+            or inst:FindFirstChildWhichIsA("BasePart", true)
+    end
+    if inst:IsA("Tool") then
+        return inst:FindFirstChild("Handle") or inst:FindFirstChildWhichIsA("BasePart", true)
+    end
+end
+
+local function add(inst, kind, name, color)
+    if tracked[inst] then return end
+    local part = adorneePart(inst)
+    if not part then return end
+    local hl = Instance.new("Highlight")
+    hl.Adornee = inst
+    hl.FillColor, hl.OutlineColor = color, color
+    hl.FillTransparency = 0.6
+    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    hl.Enabled = false
+    hl.Parent = ROOT
+    local bb = Instance.new("BillboardGui")
+    bb.Adornee = part
+    bb.AlwaysOnTop = true
+    bb.Size = UDim2.fromOffset(150, 30)
+    bb.StudsOffset = Vector3.new(0, OFFS[kind] or 3, 0)
+    bb.MaxDistance = math.huge
+    bb.Enabled = false
+    bb.Parent = ROOT
+    local tl = Instance.new("TextLabel")
+    tl.Size = UDim2.fromScale(1, 1)
+    tl.BackgroundTransparency = 1
+    tl.TextColor3 = color
+    tl.TextStrokeTransparency = 0
+    tl.Font = Enum.Font.GothamBold
+    tl.TextSize = 12
+    tl.Text = name
+    tl.Parent = bb
+    tracked[inst] = {kind = kind, name = name, hl = hl, bb = bb, tl = tl, part = part}
+end
+
+local function inChar(inst)
+    for _, p in ipairs(Players:GetPlayers()) do
+        local c = p.Character
+        if c and (inst == c or inst:IsDescendantOf(c)) then return true end
+    end
+    return false
+end
+
+local function ancestorTracked(inst, onlyKind)
+    local p = inst.Parent
+    while p and p ~= workspace do
+        local e = tracked[p]
+        if e and (not onlyKind or e.kind == onlyKind) then return true end
+        p = p.Parent
+    end
+    return false
+end
+
+-- ===== PROMPT (instan + jarak) =====
+local promptOrig = setmetatable({}, {__mode = "k"})
+local function tune(p)
+    if not promptOrig[p] then
+        promptOrig[p] = {p.HoldDuration, p.MaxActivationDistance, p.RequiresLineOfSight}
+    end
+    local o = promptOrig[p]
+    p.HoldDuration = instantOn and 0 or o[1]
+    p.MaxActivationDistance = rangeOn and 30 or o[2]
+    p.RequiresLineOfSight = (not rangeOn) and o[3] or false
+end
+local function refreshPrompts()
+    local n = 0
+    for _, d in ipairs(workspace:GetDescendants()) do
+        if d:IsA("ProximityPrompt") then pcall(tune, d) end
+        n = n + 1
+        if n % 600 == 0 then task.wait() end
+    end
+end
+local function restorePrompts()
+    for p, o in pairs(promptOrig) do
+        pcall(function()
+            p.HoldDuration, p.MaxActivationDistance, p.RequiresLineOfSight = o[1], o[2], o[3]
+        end)
+    end
+end
+
+-- ===== ANTI LAG =====
+local lagOn = false
+local lagSaved = setmetatable({}, {__mode = "k"})
+local lagQuality, lagShadows
+
+local function lagApplyInst(d)
+    if lagSaved[d] then return end
+    if d:IsA("ParticleEmitter") or d:IsA("Trail") or d:IsA("Beam") or d:IsA("Smoke")
+        or d:IsA("Fire") or d:IsA("Sparkles") then
+        lagSaved[d] = {Enabled = d.Enabled}
+        d.Enabled = false
+    elseif d:IsA("BasePart") then
+        if d.CastShadow then
+            lagSaved[d] = {CastShadow = true}
+            d.CastShadow = false
+        end
+    end
+end
+
+local function lagApplyAll()
+    pcall(function()
+        local s = settings().Rendering
+        if lagQuality == nil then lagQuality = s.QualityLevel end
+        s.QualityLevel = Enum.QualityLevel.Level01
+    end)
+    pcall(function()
+        if lagShadows == nil then lagShadows = Lighting.GlobalShadows end
+        Lighting.GlobalShadows = false
+    end)
+    for _, e in ipairs(Lighting:GetChildren()) do
+        if e:IsA("PostEffect") and not lagSaved[e] then
+            lagSaved[e] = {Enabled = e.Enabled}
+            e.Enabled = false
+        end
+    end
+    local n = 0
+    for _, d in ipairs(workspace:GetDescendants()) do
+        if not lagOn then return end
+        pcall(lagApplyInst, d)
+        n = n + 1
+        if n % 400 == 0 then task.wait() end
+    end
+end
+
+local function lagRestore()
+    for d, o in pairs(lagSaved) do
+        pcall(function() for k, v in pairs(o) do d[k] = v end end)
+        lagSaved[d] = nil
+    end
+    pcall(function()
+        if lagQuality ~= nil then
+            settings().Rendering.QualityLevel = lagQuality
+            lagQuality = nil
+        end
+    end)
+    pcall(function()
+        if lagShadows ~= nil then
+            Lighting.GlobalShadows = lagShadows
+            lagShadows = nil
+        end
+    end)
+end
+
+-- ===== KLASIFIKASI =====
+local function classify(inst)
+    if inst:IsDescendantOf(ROOT) or tracked[inst] then return end
+
+    if inst:IsA("ProximityPrompt") then
+        tune(inst)
+        local t = inst.Parent
+        if t and t:IsA("Attachment") then t = t.Parent end
+        if not t or tracked[t] or inChar(t) or ancestorTracked(t) then return end
+        local tl = t.Name:lower()
+        if isAtokHouse(tl) or nameHit(tl, SPIDER_WORDS) then return end
+        local txt = ((inst.ActionText or "") .. " " .. (inst.ObjectText or "") .. " " .. t.Name):lower()
+        local kind, label, color = match(txt, t)
+        if not kind then return end -- barang umum (lemari kayu dll) nggak ditandai
+        add(t, kind, label, color)
+        return
+    end
+
+    if not (inst:IsA("Model") or inst:IsA("BasePart") or inst:IsA("Tool")) then return end
+    local l = inst.Name:lower()
+
+    local kind, label, color
+    if nameHit(l, SPIDER_WORDS) then
+        kind, label, color = "spider", "Laba-laba", Color3.fromRGB(190, 120, 255)
+    elseif isAtok(inst, l) then
+        kind, label, color = "atok", "ATOK", Color3.fromRGB(255, 40, 40)
+    else
+        if isAtokHouse(l) then return end
+        kind, label, color = match(l, inst)
+    end
+    if not kind then
+        if inst:IsA("Model") and inst:FindFirstChildOfClass("Humanoid")
+            and not Players:GetPlayerFromCharacter(inst) then
+            kind, label, color = "npc", inst.Name, Color3.fromRGB(255, 140, 0)
+        else
+            return
+        end
+    end
+    if inChar(inst) then return end
+    if kind == "atok" then
+        if ancestorTracked(inst, "atok") then return end
+    else
+        if ancestorTracked(inst) then return end
+    end
+    add(inst, kind, label, color)
+end
+
+local function scan()
+    local n = 0
+    for _, d in ipairs(workspace:GetDescendants()) do
+        pcall(classify, d)
+        n = n + 1
+        if n % 400 == 0 then task.wait() end
+    end
+end
+
+local function hookPlayer(p)
+    if p == LP then return end
+    local function onChar(c)
+        task.spawn(function()
+            c:WaitForChild("HumanoidRootPart", 10)
+            pcall(add, c, "player", p.DisplayName, Color3.fromRGB(0, 190, 255))
+        end)
+    end
+    if p.Character then onChar(p.Character) end
+    table.insert(conns, p.CharacterAdded:Connect(onChar))
+end
+
+for _, p in ipairs(Players:GetPlayers()) do hookPlayer(p) end
+table.insert(conns, Players.PlayerAdded:Connect(hookPlayer))
+
+-- Antrian objek baru: diproses bertahap (maks 150 tiap 0.2 detik) supaya nggak lag
+local pending, pHead = {}, 1
+table.insert(conns, workspace.DescendantAdded:Connect(function(d)
+    pending[#pending + 1] = {d, os.clock()}
+end))
+
+local function drainPending()
+    local n = 0
+    while pHead <= #pending and n < 150 do
+        local e = pending[pHead]
+        if os.clock() - e[2] < 0.4 then break end
+        pending[pHead] = false
+        pHead = pHead + 1
+        n = n + 1
+        local d = e[1]
+        if d.Parent then
+            pcall(classify, d)
+            if lagOn then pcall(lagApplyInst, d) end
+        end
+    end
+    if pHead > #pending then pending, pHead = {}, 1 end
+end
+
+task.spawn(scan)
+
+-- ===== NOCLIP =====
+table.insert(conns, RS.Stepped:Connect(function()
+    if not noclipOn then return end
+    local c = LP.Character
+    if not c then return end
+    for _, v in ipairs(c:GetDescendants()) do
+        if v:IsA("BasePart") and v.CanCollide then v.CanCollide = false end
+    end
+end))
+
+-- ===== TERANG =====
+local lightOrig
+local function setLight(on)
+    if on then
+        if not lightOrig then
+            lightOrig = {Brightness = Lighting.Brightness, FogEnd = Lighting.FogEnd,
+                Ambient = Lighting.Ambient, OutdoorAmbient = Lighting.OutdoorAmbient,
+                GlobalShadows = Lighting.GlobalShadows}
+        end
+    elseif lightOrig then
+        for k, v in pairs(lightOrig) do pcall(function() Lighting[k] = v end) end
+        lightOrig = nil
+    end
+end
+
+-- ===== ANTI DISCONNECT =====
+-- 1) anti-AFK  2) blok Kick dari sisi client  3) auto rejoin kalau muncul layar error
+local DC = (getgenv and getgenv().AZ_DC) or {on = true}
+if getgenv then getgenv().AZ_DC = DC end
+DC.on = true
+
+table.insert(conns, LP.Idled:Connect(function()
+    if not DC.on then return end
+    pcall(function()
+        local vu = game:GetService("VirtualUser")
+        vu:CaptureController()
+        vu:ClickButton2(Vector2.new(0, 0))
+    end)
+end))
+
+if not DC.hooked then
+    DC.hooked = true
+    pcall(function()
+        if hookmetamethod and getnamecallmethod then
+            local old
+            local function hook(self, ...)
+                local m = getnamecallmethod()
+                if DC.on and self == LP and type(m) == "string" and m:lower() == "kick" then
+                    return
+                end
+                return old(self, ...)
+            end
+            if newcclosure then hook = newcclosure(hook) end
+            old = hookmetamethod(game, "__namecall", hook)
+        end
+    end)
+end
+
+local function reconnect()
+    for attempt = 1, 3 do
+        if not DC.on then return end
+        task.wait(2)
+        if attempt % 2 == 1 then
+            pcall(function() TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LP) end)
+        else
+            pcall(function() TeleportService:Teleport(game.PlaceId, LP) end)
+        end
+        task.wait(6)
+    end
+end
+
+task.spawn(function()
+    pcall(function()
+        local po = game:GetService("CoreGui"):WaitForChild("RobloxPromptGui", 10)
+        po = po and po:WaitForChild("promptOverlay", 10)
+        if po then
+            table.insert(conns, po.ChildAdded:Connect(function(c)
+                if DC.on and c.Name == "ErrorPrompt" then task.spawn(reconnect) end
+            end))
+        end
+    end)
+end)
+
+-- Jalan lagi otomatis setelah rejoin (butuh RELOAD_URL)
+do
+    local qot = queue_on_teleport or queueonteleport or (syn and syn.queue_on_teleport)
+    if RELOAD_URL ~= "" and qot then
+        pcall(function() qot('loadstring(game:HttpGet("' .. RELOAD_URL .. '"))()') end)
+    end
+end
+
+-- ===== LOOP UTAMA =====
+local acc = 0
+table.insert(conns, RS.Heartbeat:Connect(function(dt)
+    if speedOn then
+        local h = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
+        if h and h.WalkSpeed ~= speedVal then h.WalkSpeed = speedVal end
+    end
+    if lightOn and Lighting.Brightness ~= 2 then
+        Lighting.Brightness = 2
+        Lighting.Ambient = Color3.fromRGB(140, 140, 140)
+        Lighting.OutdoorAmbient = Color3.fromRGB(140, 140, 140)
+        Lighting.FogEnd = 1e6
+        Lighting.GlobalShadows = false
+    end
+    acc = acc + dt
+    if acc < 0.2 then return end
+    acc = 0
+
+    drainPending()
+
+    local c = LP.Character
+    local root = c and c:FindFirstChild("HumanoidRootPart")
+    local nearAtok
+    for inst, e in pairs(tracked) do
+        if not inst.Parent or not e.part.Parent then
+            e.hl:Destroy(); e.bb:Destroy(); tracked[inst] = nil
+        else
+            local on = ON[e.kind]
+            local d = root and (e.part.Position - root.Position).Magnitude
+            if d and MAXD[e.kind] and d > MAXD[e.kind] then on = false end
+            e.hl.Enabled, e.bb.Enabled = on, on
+            if on and d then e.tl.Text = e.name .. " [" .. math.floor(d) .. "m]" end
+            if e.kind == "atok" and d and (not nearAtok or d < nearAtok) then nearAtok = d end
+        end
+    end
+    if alarmLbl then
+        if alarmOn and nearAtok and nearAtok < 70 then
+            alarmLbl.Text = "AWAS! ATOK DEKAT [" .. math.floor(nearAtok) .. "m]"
+            alarmLbl.Visible = true
+        else
+            alarmLbl.Visible = false
+        end
+    end
+end))
+
+-- ===== STOP =====
+local function stop()
+    noclipOn = false; lightOn = false; instantOn = false; rangeOn = false
+    DC.on = false
+    lagOn = false
+    pcall(lagRestore)
+    setLight(false)
+    restorePrompts()
+    local h = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
+    if speedOn and h then h.WalkSpeed = origSpeed end
+    speedOn = false
+    for _, cn in ipairs(conns) do pcall(function() cn:Disconnect() end) end
+    pcall(function() ROOT:Destroy() end)
+    pcall(function() if sg then sg:Destroy() end end)
+end
+if getgenv then getgenv().AZ_ATOK_STOP = stop end
+
+-- ===== GUI =====
+local FULL_H = 290
+local NORMAL = Color3.fromRGB(40, 40, 60)
+local GREEN = Color3.fromRGB(30, 110, 60)
+
+local okGui, err = pcall(function()
+    sg = Instance.new("ScreenGui")
+    sg.Name = "AZ_GUI"
+    sg.ResetOnSpawn = false
+    sg.Parent = guiParent()
+
+    alarmLbl = Instance.new("TextLabel")
+    alarmLbl.Size = UDim2.fromOffset(320, 32)
+    alarmLbl.Position = UDim2.new(0.5, -160, 0, 70)
+    alarmLbl.BackgroundColor3 = Color3.fromRGB(120, 0, 0)
+    alarmLbl.BackgroundTransparency = 0.25
+    alarmLbl.TextColor3 = Color3.new(1, 1, 1)
+    alarmLbl.Font = Enum.Font.GothamBold
+    alarmLbl.TextSize = 16
+    alarmLbl.Visible = false
+    alarmLbl.Parent = sg
+    Instance.new("UICorner", alarmLbl)
+
+    local f = Instance.new("Frame")
+    f.Size = UDim2.fromOffset(250, FULL_H)
+    f.Position = UDim2.new(0, 10, 0.1, 0)
+    f.BackgroundColor3 = Color3.fromRGB(20, 20, 32)
+    f.Active = true
+    f.Draggable = true
+    f.Parent = sg
+    Instance.new("UICorner", f)
+
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, -64, 0, 28)
+    title.Position = UDim2.fromOffset(8, 0)
+    title.BackgroundTransparency = 1
+    title.Text = "AZZURA HUB by Azhari"
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.TextColor3 = Color3.fromRGB(120, 200, 255)
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 13
+    title.Parent = f
+
+    local body = Instance.new("ScrollingFrame")
+    body.Size = UDim2.new(1, -8, 1, -34)
+    body.Position = UDim2.fromOffset(4, 32)
+    body.BackgroundTransparency = 1
+    body.BorderSizePixel = 0
+    body.ScrollBarThickness = 4
+    body.CanvasSize = UDim2.new()
+    body.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    body.Parent = f
+    local grid = Instance.new("UIGridLayout")
+    grid.CellSize = UDim2.fromOffset(112, 28)
+    grid.CellPadding = UDim2.fromOffset(4, 4)
+    grid.Parent = body
+
+    local function mk(parent, text, cb)
+        local b = Instance.new("TextButton")
+        b.BackgroundColor3 = NORMAL
+        b.TextColor3 = Color3.new(1, 1, 1)
+        b.Font = Enum.Font.Gotham
+        b.TextSize = 12
+        b.Text = text
+        b.Parent = parent
+        Instance.new("UICorner", b)
+        b.Activated:Connect(function() pcall(cb, b) end)
+        return b
+    end
+
+    local espBtns = {}
+    local function refreshEsp(key)
+        local x = espBtns[key]
+        x.b.Text = x.label .. ": " .. (ON[key] and "ON" or "OFF")
+        x.b.BackgroundColor3 = ON[key] and GREEN or NORMAL
+    end
+    local function espToggle(label, key)
+        local b = mk(body, label .. ": OFF", function()
+            ON[key] = not ON[key]
+            refreshEsp(key)
+        end)
+        espBtns[key] = {b = b, label = label}
+    end
+
+    local allOn = false
+    mk(body, "SEMUA ESP: OFF", function(b)
+        allOn = not allOn
+        for k in pairs(ON) do
+            ON[k] = allOn
+            if espBtns[k] then refreshEsp(k) end
+        end
+        b.Text = "SEMUA ESP: " .. (allOn and "ON" or "OFF")
+        b.BackgroundColor3 = allOn and GREEN or NORMAL
+    end)
+
+    espToggle("Player", "player")
+    espToggle("Atok", "atok")
+    espToggle("Laba-laba", "spider")
+    espToggle("Kunci", "key")
+    espToggle("Fius", "fuse")
+    espToggle("Linggis", "crow")
+    espToggle("Korek", "lighter")
+    espToggle("Alat", "tool")
+    espToggle("Papan", "plank")
+    espToggle("Mangga", "lock")
+    espToggle("Generator", "gen")
+    espToggle("Nota", "note")
+    espToggle("NPC", "npc")
+
+    local function featToggle(label, fn, init)
+        local state = init and true or false
+        local b
+        b = mk(body, label .. ": " .. (state and "ON" or "OFF"), function()
+            state = not state
+            b.Text = label .. ": " .. (state and "ON" or "OFF")
+            b.BackgroundColor3 = state and GREEN or NORMAL
+            fn(state)
+        end)
+        if state then
+            b.BackgroundColor3 = GREEN
+            pcall(fn, true)
+        end
+    end
+
+    featToggle("Alarm Atok", function(s) alarmOn = s end)
+    featToggle("Lari Cepat", function(s)
+        speedOn = s
+        local h = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
+        if s then
+            if h then origSpeed = h.WalkSpeed end
+        elseif h then
+            h.WalkSpeed = origSpeed
+        end
+    end)
+    mk(body, "Speed: " .. speedVal, function(b)
+        local i = table.find(SPEEDS, speedVal) or 1
+        speedVal = SPEEDS[i % #SPEEDS + 1]
+        b.Text = "Speed: " .. speedVal
+    end)
+    featToggle("Tembus", function(s) noclipOn = s end)
+    featToggle("Terang", function(s) lightOn = s; setLight(s) end)
+    featToggle("Instan Aksi", function(s) instantOn = s; task.spawn(refreshPrompts) end)
+    featToggle("Jarak Aksi", function(s) rangeOn = s; task.spawn(refreshPrompts) end)
+    featToggle("Anti DC", function(s) DC.on = s end, true)
+    featToggle("Anti Lag", function(s)
+        lagOn = s
+        if s then task.spawn(lagApplyAll) else lagRestore() end
+    end, true)
+    mk(body, "Rescan", function() task.spawn(scan) end)
+
+    local mini = false
+    local minB = mk(f, "-", function(b)
+        mini = not mini
+        body.Visible = not mini
+        f.Size = mini and UDim2.fromOffset(250, 28) or UDim2.fromOffset(250, FULL_H)
+        b.Text = mini and "+" or "-"
+    end)
+    minB.Size = UDim2.fromOffset(24, 22)
+    minB.Position = UDim2.new(1, -56, 0, 3)
+
+    local closeB = mk(f, "X", function() stop() end)
+    closeB.Size = UDim2.fromOffset(24, 22)
+    closeB.Position = UDim2.new(1, -28, 0, 3)
+    closeB.BackgroundColor3 = Color3.fromRGB(110, 30, 30)
+end)
+if not okGui then warn("[AZZURA] GUI error: " .. tostring(err)) end
+print("[AZZURA] loaded v6")
